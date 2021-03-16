@@ -1,39 +1,77 @@
 import json
 import boto3
-import requests
 import datetime
 import time
 import string
-#from binance.client import Client
 import constants
+import math
+from boto3.dynamodb.conditions import Key, Attr
 dynamodb = boto3.resource('dynamodb')
 def lambda_handler(event, context):
+    # TODO implement
+    print(event)
+    params = event.get("queryStringParameters")
+    print(params)
+    # body = json.loads(event["body"])
+    # print(body)
+    interval = params.get("interval")
+    symbol = params.get("symbol")
+    limit = params.get("limit")
+    if symbol is None:
+        symbol = constant.symbols
     table = dynamodb.Table('BINANCE_TICKS')
-    now = datetime.datetime.utcnow()
-    dt = datetime.datetime.strptime(datetime.datetime.now().strftime('%Y-%m-%d %H:%M'), '%Y-%m-%d %H:%M')
-    endTime = int(dt.replace(tzinfo=datetime.timezone.utc).timestamp())
-    dt1 = dt - datetime.timedelta(minutes = 1)
-    startTime = int(dt1.replace(tzinfo=datetime.timezone.utc).timestamp())
-    for sym in constants.symbols:
-        ep = "https://api.binance.com/api/v3/klines?symbol="+sym+"&interval=1m&startTime="+str(startTime*1000)+"&endTime="+str(endTime*1000)  
-        r1 = requests.get(ep)
-        if r1.status_code == 200:
-            data = json.loads(r1.text)
-            if len(data) > 0:
-                data = data[0]
-                tick = {}
-                tick["key"] = sym +"_"+ str(dt1)
-                tick["symbol"] = sym
-                tick["timestamp"] = str(dt1)
-                tick["open"] = str(data[1])
-                tick["high"] = str(data[2])
-                tick["low"] = str(data[3])
-                tick["close"] = str(data[4])
-                tick["volume"] = str(data[5])
-                table.put_item( Item = tick )
-        else:
-            print("[CRTITICAL]:unable to get response from api")
+    endTime = '2021-03-04 00:26:00'
+    endTime = datetime.datetime.strptime('2021-03-04 00:26','%Y-%m-%d %H:%M')
+    if limit == '12h':
+        limit = endTime - datetime.timedelta(minutes  = 720)
+    elif limit == '48h':
+        limit = endTime - datetime.timedelta(minutes = 2160)
+    else:
+        limit = endTime -  datetime.timedelta(minutes = 1440)
+    bool = True
+    result =[]
+    response = getResponse(bool,table,interval, symbol, endTime, limit)
+    print(response)
+    result.append(response)
     return {
         'statusCode': 200,
-        'body': json.dumps('Data captured for tick' + str(dt1))
+        'body': json.dumps(result)
     }
+def getResponse(bool, table, interval, symbol, endTime, limit):
+    res = []
+    while(bool):
+        if interval == '5m':
+            startTime = endTime - datetime.timedelta(minutes = 5)
+        elif interval == '15m':
+            startTime = endTime - datetime.timedelta(minutes = 15)
+        elif interval == '30m':
+            startTime = endTime - datetime.timedelta(minutes = 30)
+        elif interval == '1h':
+            startTime = endTime - datetime.timedelta(minutes = 60)
+        print(startTime)
+        entries = table.query(IndexName='symbol-timestamp-index',
+            KeyConditionExpression=Key('symbol').eq(symbol)&Key('timestamp').between(str(startTime), str(endTime)),
+        )
+        arr = entries['Items']
+        if len(arr) == 0 or limit == endTime:
+            bool = False
+            break
+        data = {}
+        data["symbol"] = symbol
+        data["startTime"] = arr[0]["timestamp"]
+        data["endTime"]= arr[-1]["timestamp"]
+        data["open"] = arr[0]["open"]
+        data["close"] = arr[-1]["close"]
+        high = -math.inf
+        low = math.inf
+        volume = 0
+        for x in arr:
+            high = max(high,float(x["high"]))
+            low = min(low, float(x["low"]))
+            volume = volume + float(x["volume"])
+        data["high"] = high
+        data["low"] = low
+        data["volume"] = volume
+        res.append(data)
+        endTime = startTime
+    return res
